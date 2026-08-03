@@ -18,8 +18,13 @@ from services.reranker import RerankerService
 from services.llm import LLMService
 from services.rag import RagService
 from services.prompts_retriever import get_prompt
+from services.memory import Memory
+
+from database import init_db
+
 
 load_dotenv()
+init_db()
 HF_TOKEN = os.getenv('HF_TOKEN_2')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +44,7 @@ async def lifespan(app: FastAPI):
     document = extract_pdf(DOCUMENTS_DIR)
     pages = document['text_blocks']
     source = document['metadata']['source']
-    
+        
     chunks = chunk_pages(pages, source, chunk_size = 600, overlap = 50)
     
     embedding_service = EmbeddingService()
@@ -70,12 +75,12 @@ async def lifespan(app: FastAPI):
             metadatas = metadatas,
             embeddings = chunks_embeddings,
         )
-
     reranker_service = RerankerService()
     retriever = Retriever(collection, embedding_service, reranker_service = reranker_service)
     llm_service = LLMService()
 
-    state.rag_service = RagService(retriever, llm_service)
+    memory = Memory(max_turns = 5)
+    state.rag_service = RagService(retriever, llm_service, memory)
     state.hf_client = InferenceClient(provider='auto', token=HF_TOKEN)
     
     yield
