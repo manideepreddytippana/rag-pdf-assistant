@@ -104,6 +104,7 @@ def chat(request : UserRequest):
     '''function to answer user question using RAG'''
     response = state.rag_service.get_answer(
             query=request.prompt,
+            session_id=request.session_id,
             top_k=5,
         )   
 

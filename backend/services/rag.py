@@ -110,6 +110,7 @@ Answer:
             results.append(result)
 
         if len(results) == 1:
+            self.memory.add_message(session_id, query, results[0]['answer'])
             return results[0]
 
         else:
@@ -129,6 +130,7 @@ Answer:
 
             
 
+        self.memory.add_message(session_id, query, combined_answer)
         return {
             "question": query,
             "answer": combined_answer,

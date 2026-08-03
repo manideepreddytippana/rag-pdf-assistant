@@ -13,16 +13,13 @@ class Memory:
 
             if conversation:
                 recent_messages = conversation.messages[-self.message_limit:]
-                return recent_messages
-            return ""
 
-            history = []
-    
-            for message in recent_messages:
-    
-                role = "User" if message.role == "user" else "Assistant"
-                history.append(f"{role}: {message.content}")
-            return "\n".join(history)
+                history = []
+                for message in recent_messages:
+                    role = "User" if message.role == "user" else "Assistant"
+                    history.append(f"{role}: {message.content}")
+                return "\n".join(history)
+            return ""
 
     def add_message(self, session_id: str, user_message: str, assistant_message: str):
 
@@ -43,6 +40,6 @@ class Memory:
 
             except Exception:
                 db.rollback()
-                raise "Failed to interract with Postgresql DB"
+                raise Exception("Failed to interact with PostgreSQL DB")
 
                 
