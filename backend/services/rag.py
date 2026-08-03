@@ -73,11 +73,11 @@ Rules:
 Answer:
 """.strip()
 
-    def get_single_answer(self, query, history, top_k: int = 5):
+    def get_single_answer(self, query, history, top_k: int = 5, similarity_threshold: float = 0.65):
         # rewritten the query with history context
         search_query = self.contextualize_query(query, history)
 
-        results = self.retriever.query(search_query, top_k=top_k)
+        results = self.retriever.query(search_query, top_k=top_k, similarity_threshold=similarity_threshold)
         context = self.build_context(results)
         prompt = self.build_prompt(query, context, history)
         
@@ -96,7 +96,7 @@ Answer:
             "sources": sources
         }
   
-    def get_answer(self, query, session_id = "session_id",top_k: int = 5):
+    def get_answer(self, query, session_id = "session_id", top_k: int = 5, similarity_threshold: float = 0.65):
 
         # get history for the db
         history = self.memory.get_history(session_id)
@@ -106,7 +106,7 @@ Answer:
 
         results = []
         for question in questions:
-            result = self.get_single_answer(question, history= history, top_k=top_k)
+            result = self.get_single_answer(question, history= history, top_k=top_k, similarity_threshold=similarity_threshold)
             results.append(result)
 
         if len(results) == 1:

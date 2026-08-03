@@ -106,6 +106,7 @@ def chat(request : UserRequest):
             query=request.prompt,
             session_id=request.session_id,
             top_k=5,
+            similarity_threshold=0.65
         )   
 
     print("RETRIEVER RESULTS:")

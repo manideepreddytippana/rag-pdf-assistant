@@ -5,7 +5,7 @@ class Retriever:
         self.embedding_service = embedding_service
         self.reranker_service = reranker_service
 
-    def query(self, query: str, top_k: int = 5, initial_top_k : int = 20):
+    def query(self, query: str, top_k: int = 5, initial_top_k : int = 20, similarity_threshold: float = 0.65):
 
         query_embedding = self.embedding_service.embed_query(query)
 
@@ -26,17 +26,18 @@ class Retriever:
             distances = chroma_results['distances'][0]
 
             for i in range(len(ids)):
-                
-                results.append({
-                    "chunk_id": metadatas[i]["chunk_id"],
-                    "source": metadatas[i]["source"],
-                    "page_no": metadatas[i]["page_no"],
-                    "text": documents[i],
-                    "score": float(distances[i])
-                })
+                similarity = 1 - float(distances[i])
+                if similarity >= similarity_threshold:
+                    results.append({
+                        "chunk_id": metadatas[i]["chunk_id"],
+                        "source": metadatas[i]["source"],
+                        "page_no": metadatas[i]["page_no"],
+                        "text": documents[i],
+                        "score": similarity
+                    })
 
         if self.reranker_service and results:
-            results = self.reranker_service.reranker(query, results, top_k = top_k)
+            results = self.reranker_service.reranker(query, results, top_k = top_k, threshold = similarity_threshold)
 
         return results[:top_k]
             
