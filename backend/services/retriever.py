@@ -1,15 +1,19 @@
 class Retriever:
     
-    def __init__(self,collection, embedding_service):
+    def __init__(self,collection, embedding_service, reranker_service = None):
         self.collection = collection
         self.embedding_service = embedding_service
+        self.reranker_service = reranker_service
 
-    def query(self,query: str, top_k: int = 5):
+    def query(self, query: str, top_k: int = 5, initial_top_k : int = 20):
 
         query_embedding = self.embedding_service.embed_query(query)
+
+        fetch_k = initial_top_k if self.reranker_service else top_k
+        
         chroma_results = self.collection.query(
             query_embeddings = query_embedding,
-            n_results=top_k
+            n_results=fetch_k
         )
 
         results = []
@@ -31,5 +35,8 @@ class Retriever:
                     "score": float(distances[i])
                 })
 
-        return results
+        if self.reranker_service and results:
+            results = self.reranker_service.reranker(query, results, top_k = top_k)
+
+        return results[:top_k]
             

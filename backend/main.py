@@ -1,7 +1,7 @@
 import os
 import json
 from contextlib import asynccontextmanager
-
+import uvicorn
 import chromadb
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -13,6 +13,8 @@ from services.pdf_reader import extract_pdf
 from services.chunker import chunk_pages
 from services.embeddings import EmbeddingService
 from services.retriever import Retriever
+from services.reranker import RerankerService
+
 from services.llm import LLMService
 from services.rag import RagService
 from services.prompts_retriever import get_prompt
@@ -22,7 +24,7 @@ HF_TOKEN = os.getenv('HF_TOKEN_2')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
-DOCUMENTS_DIR = os.path.join(ROOT_DIR, "backend/data", "attention.pdf")
+DOCUMENTS_DIR = os.path.join(ROOT_DIR, "backend/data", "netflix.pdf")
 CHROMA_DB_DIR = os.path.join(ROOT_DIR, 'chroma_db')
 
 class State:
@@ -68,8 +70,9 @@ async def lifespan(app: FastAPI):
             metadatas = metadatas,
             embeddings = chunks_embeddings,
         )
-       
-    retriever = Retriever( collection, embedding_service)
+
+    reranker_service = RerankerService()
+    retriever = Retriever(collection, embedding_service, reranker_service = reranker_service)
     llm_service = LLMService()
 
     state.rag_service = RagService(retriever, llm_service)
@@ -111,4 +114,6 @@ def chat(request : UserRequest):
     except json.JSONDecodeError:
         return {'message': 'Error parsing the model output'}
 
+if __name__ == "__main__":
+    uvicorn.run(app, port=8000)
 
