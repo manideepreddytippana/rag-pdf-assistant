@@ -1,10 +1,10 @@
-import fitz
+import pymupdf
 import os
 import json
 
 def extract_pdf(file_path : str):
     
-    document = fitz.open(file_path)
+    document = pymupdf.open(file_path)
     doc_name = os.path.basename(file_path)
     metadata = {
         "title": document.metadata.get("title"),

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from huggingface_hub import InferenceClient
+from openai import OpenAI
 
 from schemas import UserRequest, ModelResponse
 from services.pdf_reader import extract_pdf
@@ -26,6 +27,8 @@ from database import init_db
 load_dotenv()
 init_db()
 HF_TOKEN = os.getenv('HF_TOKEN_2')
+API_KEY = os.getenv('API_KEY')
+API_BASE_URL = os.getenv('API_BASE_URL')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
@@ -34,7 +37,7 @@ CHROMA_DB_DIR = os.path.join(ROOT_DIR, 'chroma_db')
 
 class State:
     rag_service: RagService = None
-    hf_client: InferenceClient = None
+    hf_client: OpenAI = None
 
 state = State()
 
@@ -81,7 +84,7 @@ async def lifespan(app: FastAPI):
 
     memory = Memory(max_turns = 5)
     state.rag_service = RagService(retriever, llm_service, memory)
-    state.hf_client = InferenceClient(provider='auto', token=HF_TOKEN)
+    state.hf_client = OpenAI(api_key = API_KEY, base_url = API_BASE_URL)
     
     yield
 

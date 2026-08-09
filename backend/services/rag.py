@@ -29,7 +29,7 @@ class RagService:
                 Standalone Question:
         """.strip()
 \
-        return self.llmservice.generate_response("You are a helpful query rewriter", prompt).strip()
+        return self.llmservice.generate_response("You are a helpful query rewriter", prompt)
     
         
     def build_context(self, results : list[dict]):
