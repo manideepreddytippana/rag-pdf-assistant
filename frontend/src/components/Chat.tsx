@@ -7,7 +7,10 @@ interface Message {
   text: string;
 }
 
+const generateSessionId = () => 'session_' + Math.random().toString(36).substring(2, 10);
+
 const Chat = () => {
+  const [sessionId, setSessionId] = useState<string>(generateSessionId);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -26,6 +29,12 @@ const Chat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  const handleNewChat = () => {
+    setSessionId(generateSessionId());
+    setMessages([]);
+    setInput('');
+  };
+
   const handleSend = () => {
     if (!input.trim()) return;
 
@@ -34,14 +43,16 @@ const Chat = () => {
     setInput('');
     setLoading(true);
 
-    api.post('/chat', { prompt: userMessage })
+    api.post('/chat', { prompt: userMessage, session_id: sessionId })
       .then((response) => {
         console.log("setResponse", response.data);
-        setMessages((prev) => [...prev, { role: 'assistant', text: response.data }]);
+        const answer = response.data?.answer || 'Received an empty response. Please try again.';
+        setMessages((prev) => [...prev, { role: 'assistant', text: answer }]);
       })
       .catch((error) => {
         console.error(error);
-        setMessages((prev) => [...prev, { role: 'assistant', text: 'Something went wrong. Please try again.' }]);
+        const errorMsg = error.response?.data?.detail || 'Something went wrong. Please try again.';
+        setMessages((prev) => [...prev, { role: 'assistant', text: errorMsg }]);
       })
       .finally(() => {
         setLoading(false);
@@ -52,17 +63,33 @@ const Chat = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
-      }
-    };
+    }
+  };
 
   return (
     <div className="chat-container">
+      <div className="chat-header">
+        <div className="chat-header-title">
+          <span className="chat-header-badge">RAG Assistant</span>
+        </div>
+        <button 
+          className="chat-new-btn" 
+          onClick={handleNewChat} 
+          title="Start a new conversation"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          New Chat
+        </button>
+      </div>
+
       <div className="chat-messages">
         {messages.length === 0 ? (
           <div className="chat-empty-state">
             <div className="chat-empty-icon">✦</div>
             <h2>How can I help you today?</h2>
-            <p>Send a message to get started.</p>
+            <p>Ask questions based on the uploaded document.</p>
           </div>
         ) : (
           messages.map((msg, i) => (
