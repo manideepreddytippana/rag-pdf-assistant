@@ -1,15 +1,28 @@
+from config import settings
+
 class Retriever:
     
-    def __init__(self,collection, embedding_service, reranker_service = None):
+    def __init__(self, collection, embedding_service, reranker_service = None):
         self.collection = collection
         self.embedding_service = embedding_service
         self.reranker_service = reranker_service
 
-    def query(self, query: str, top_k: int = 5, initial_top_k : int = 20, similarity_threshold: float = 0.65):
+    def query(
+        self,
+        query: str,
+        top_k: int = None,
+        initial_top_k: int = None,
+        embedding_threshold: float = None
+    ) -> list[dict]:
+       
+        target_top_k = top_k if top_k is not None else settings.top_k
+        target_initial_top_k = initial_top_k if initial_top_k is not None else settings.initial_top_k
+        target_embedding_threshold = (
+            embedding_threshold if embedding_threshold is not None else settings.embedding_threshold
+        )
 
         query_embedding = self.embedding_service.embed_query(query)
-
-        fetch_k = initial_top_k if self.reranker_service else top_k
+        fetch_k = target_initial_top_k if self.reranker_service else target_top_k
         
         chroma_results = self.collection.query(
             query_embeddings = query_embedding,
@@ -18,7 +31,7 @@ class Retriever:
 
         results = []
 
-        if chroma_results['ids'] and len(chroma_results['ids'])> 0:
+        if chroma_results['ids'] and len(chroma_results['ids']) > 0:
 
             ids = chroma_results['ids'][0]
             documents = chroma_results['documents'][0]
@@ -27,7 +40,7 @@ class Retriever:
 
             for i in range(len(ids)):
                 similarity = 1 - float(distances[i])
-                if similarity >= similarity_threshold:
+                if similarity >= target_embedding_threshold:
                     results.append({
                         "chunk_id": metadatas[i]["chunk_id"],
                         "source": metadatas[i]["source"],
@@ -37,7 +50,6 @@ class Retriever:
                     })
 
         if self.reranker_service and results:
-            results = self.reranker_service.reranker(query, results, top_k = top_k, threshold = similarity_threshold)
+            results = self.reranker_service.rerank(query, results, top_k=target_top_k)
 
-        return results[:top_k]
-            
+        return results[:target_top_k]

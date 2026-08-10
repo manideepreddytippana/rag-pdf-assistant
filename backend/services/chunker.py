@@ -1,40 +1,45 @@
-import json
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from config import settings
 
-def chunk_text(text: str, chunk_size : int, overlap : int) -> list[str]:
+def chunk_pages(
+    pages: list[dict],
+    source: str,
+    chunk_size: int = None,
+    overlap: int = None,
+) -> list[dict]:
 
-    if chunk_size <=0 :
-        raise ValueError("chunk_size value must be greater than 0")
-    if overlap < 0:
-        raise ValueError("overlap cannot be negative value")
-    
-    chunks = []
-    start = 0
+    target_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
+    target_overlap = overlap if overlap is not None else settings.chunk_overlap
 
-    while start < len(text):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=target_chunk_size,
+        chunk_overlap=target_overlap,
+        length_function=len,
+        separators=[
+            "\n\n\n",
+            "\n\n",
+            "\n",
+            ". ",
+            "; ",
+            ", ",
+            " ",
+            "",
+        ],
+    )
 
-        end = start + chunk_size
-        chunk = text[start: end].strip()
-
-        if chunk:
-            chunks.append(chunk)
-        start +=  chunk_size - overlap
-
-    return chunks
-
-def chunk_pages(pages: list[dict], source: str, chunk_size: int= 600, overlap: int = 50) -> list[dict]:
-    
     page_chunks = []
     chunk_id = 0
-    
+
     for page in pages:
-        chunks = chunk_text(text = page["text"], chunk_size = chunk_size, overlap = overlap)
+        chunks = splitter.split_text(page["text"])
 
         for chunk in chunks:
             page_chunks.append({
                 "chunk_id": chunk_id,
-                "source": "", # source not defined
+                "source": source,
                 "page_no": page["page_no"],
-                "text":chunk
+                "text": chunk,
             })
-            chunk_id +=1
+            chunk_id += 1
+
     return page_chunks
