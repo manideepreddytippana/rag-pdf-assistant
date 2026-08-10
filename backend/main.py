@@ -1,67 +1,60 @@
-import os
-import json
+import logging
 from contextlib import asynccontextmanager
 import uvicorn
 import chromadb
-from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from huggingface_hub import InferenceClient
-from openai import OpenAI
 
-from schemas import UserRequest, ModelResponse
+from config import settings
+from schemas import UserRequest, ChatResponse
 from services.pdf_reader import extract_pdf
 from services.chunker import chunk_pages
 from services.embeddings import EmbeddingService
 from services.retriever import Retriever
 from services.reranker import RerankerService
-
 from services.llm import LLMService
 from services.rag import RagService
-from services.prompts_retriever import get_prompt
+from services.query_resolver import QueryResolver
 from services.memory import Memory
-
 from database import init_db
 
+# Configure logging for the entire pipeline
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("rag_pipeline")
 
-load_dotenv()
 init_db()
-HF_TOKEN = os.getenv('HF_TOKEN_2')
-API_KEY = os.getenv('API_KEY')
-API_BASE_URL = os.getenv('API_BASE_URL')
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
-DOCUMENTS_DIR = os.path.join(ROOT_DIR, "backend/data", "netflix.pdf")
-CHROMA_DB_DIR = os.path.join(ROOT_DIR, 'chroma_db')
 
 class State:
     rag_service: RagService = None
-    hf_client: OpenAI = None
 
 state = State()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     
-    document = extract_pdf(DOCUMENTS_DIR)
-    pages = document['text_blocks']
-    source = document['metadata']['source']
-        
-    chunks = chunk_pages(pages, source, chunk_size = 600, overlap = 50)
-    
-    embedding_service = EmbeddingService()
-    chunks_embeddings = embedding_service.embed_documents(chunks)
-    
-    chroma_client = chromadb.PersistentClient(path = CHROMA_DB_DIR)
+    chroma_client = chromadb.PersistentClient(path=settings.chroma_db_dir)
     collection = chroma_client.get_or_create_collection(
-        name = 'pdf_documents',
-        metadata = {"hnsw:space": "cosine"},
+        name='pdf_documents',
+        metadata={"hnsw:space": "cosine"},
     )
 
+    embedding_service = EmbeddingService()
+
+    # Only process PDF if collection is empty — skip on subsequent restarts
     if collection.count() == 0:
-        print("Populating chromadb with document chunks")
-    
+        logger.info(f"ChromaDB empty — ingesting document from {settings.pdf_path}")
+
+        document = extract_pdf(settings.pdf_path)
+        pages = document['text_blocks']
+        source = document['metadata']['source']
+            
+        chunks = chunk_pages(pages, source)
+        chunks_embeddings = embedding_service.embed_documents(chunks)
+
         ids = [str(chunk["chunk_id"]) for chunk in chunks]
         documents = [chunk['text'] for chunk in chunks]
         metadatas = [
@@ -73,57 +66,79 @@ async def lifespan(app: FastAPI):
         ]
     
         collection.add(
-            ids = ids,
-            documents = documents,
-            metadatas = metadatas,
-            embeddings = chunks_embeddings,
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=chunks_embeddings,
         )
-    reranker_service = RerankerService()
-    retriever = Retriever(collection, embedding_service, reranker_service = reranker_service)
-    llm_service = LLMService()
+        logger.info(f"Ingested {len(chunks)} chunks into ChromaDB")
+    else:
+        logger.info(f"ChromaDB already has {collection.count()} documents, skipping ingestion")
 
-    memory = Memory(max_turns = 5)
-    state.rag_service = RagService(retriever, llm_service, memory)
-    state.hf_client = OpenAI(api_key = API_KEY, base_url = API_BASE_URL)
+    reranker_service = RerankerService()
+    retriever = Retriever(collection, embedding_service, reranker_service=reranker_service)
+    llm_service = LLMService()
+    query_resolver = QueryResolver(llm_service)
+    memory = Memory()
+
+    state.rag_service = RagService(
+        retriever=retriever,
+        llmservice=llm_service,
+        memory=memory,
+        query_resolver=query_resolver
+    )
     
     yield
 
-app = FastAPI(lifespan = lifespan)
+app = FastAPI(title="RAG PDF Assistant API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins = ["http://localhost:5173"],
-    allow_methods = ["*"],
-    allow_headers = ["*"],
-    allow_credentials = True
+    allow_origins=settings.cors_origins,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
+    allow_credentials=True
 )
 
 @app.get('/')
 def home():
     return {'message': 'Welcome to RAG Application'}
 
-@app.post('/chat')
-def chat(request : UserRequest):
-    '''function to answer user question using RAG'''
-    response = state.rag_service.get_answer(
-            query=request.prompt,
-            session_id=request.session_id,
-            top_k=5,
-            similarity_threshold=0.65
-        )   
-
-    print("RETRIEVER RESULTS:")
-    print(response)
-
+@app.post('/chat', response_model=ChatResponse)
+async def chat(request: UserRequest):
+    '''Async endpoint that returns structured JSON for the frontend'''
     try:
-        source = ', '.join(
-            f"source: {source['source']} , page : {source['page_no']}"
-            for source in response['sources']
+        # Sanitize input — collapse excessive whitespace
+        clean_query = " ".join(request.prompt.split())
+
+        response = state.rag_service.get_answer(
+            query=clean_query,
+            session_id=request.session_id,
         )
-        return f"{response['answer']} \n\n   {source}"
-    except json.JSONDecodeError:
-        return {'message': 'Error parsing the model output'}
+
+        return {
+            "answer": response["answer"],
+            "sources": response["sources"],
+            "question": response["question"]
+        }
+
+    except Exception as e:
+        logger.error(f"Chat endpoint failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate response. Please try again.")
+
+@app.get('/sessions')
+async def list_sessions():
+    '''List all active conversation sessions'''
+    sessions = state.rag_service.memory.list_sessions()
+    return {"sessions": sessions}
+
+@app.delete('/sessions/{session_id}')
+async def clear_session(session_id: str):
+    '''Clear conversation history for a session'''
+    cleared = state.rag_service.memory.clear_history(session_id)
+    if cleared:
+        return {"message": f"Session '{session_id}' history cleared"}
+    return {"message": f"Session '{session_id}' not found"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, port=8000)
-
+    uvicorn.run(app, port=settings.server_port)
