@@ -1,38 +1,24 @@
-from services.query_decomposer import QueryDecomposer
+import logging
+import time
+
 from services.prompts_retriever import get_prompt
+from services.query_resolver import QueryResolver
+from config import settings
+
+logger = logging.getLogger("rag_pipeline")
 
 system_prompt = get_prompt("system_prompt.txt")
 
 class RagService:
 
-    def __init__(self, retriever, llmservice, memory):
+    def __init__(self, retriever, llmservice, memory, query_resolver: QueryResolver = None):
     
         self.retriever = retriever
         self.llmservice = llmservice
         self.memory = memory
-        self.query_decomposer = QueryDecomposer(llmservice)
+        self.query_resolver = query_resolver or QueryResolver(llmservice)
 
-    def contextualize_query(self, query, history):
-
-        if not history:
-            return query
-        prompt = f"""
-        Given a chat history and the latest user question, formulate a standalone question 
-                that can be understood without the chat history. Do NOT answer the question, 
-                just reformulate it.
-                
-                Chat History:
-                {history}
-                
-                User Question: {query}
-                
-                Standalone Question:
-        """.strip()
-\
-        return self.llmservice.generate_response("You are a helpful query rewriter", prompt)
-    
-        
-    def build_context(self, results : list[dict]):
+    def build_context(self, results: list[dict]):
 
         context_parts = []
 
@@ -48,40 +34,49 @@ class RagService:
 
         return "\n---\n".join(context_parts)
 
-    def build_prompt(self, query, context, history=""):
+    def build_prompt(self, query: str, context: str, history: str = ""):
 
-        return f"""
-Answer the question using ONLY the context below.
-
-Rules:
-- Match response length/format to question type: factual → 1-3 sentences, no lists; how/why/process → numbered steps; comparison/multi-part → bullets/table; otherwise → shortest complete answer.
-- Don't add structure (headings, bullets, numbering) unless the question or content needs it.
-- If context is insufficient, say clearly what's missing instead of guessing.
-- Never hallucinate or fabricate facts.
-
-<history>
+        return f"""<conversation_history>
 {history}
-</history>
-<context>
+</conversation_history>
+
+<retrieved_context>
 {context}
-</context>
+</retrieved_context>
 
 <question>
 {query}
 </question>
 
-Answer:
-""".strip()
+Provide a precise answer based solely on the retrieved context above.""".strip()
 
-    def get_single_answer(self, query, history, top_k: int = 5, similarity_threshold: float = 0.65):
-        # rewritten the query with history context
-        search_query = self.contextualize_query(query, history)
+    def get_answer(self, query: str, session_id: str = "session_id", top_k: int = None):
 
-        results = self.retriever.query(search_query, top_k=top_k, similarity_threshold=similarity_threshold)
+        start_time = time.time()
+        target_top_k = top_k if top_k is not None else settings.top_k
+        logger.info(f"Query received | session={session_id} | query={query[:100]}")
+
+        history = self.memory.get_history(session_id)
+        condensed_history = self.memory.get_condensed_history(session_id)
+
+        resolution_start = time.time()
+        resolution = self.query_resolver.resolve(query, condensed_history)
+        search_query = resolution.get("search_query", query)
+        resolution_time = time.time() - resolution_start
+
+        retrieval_start = time.time()
+        results = self.retriever.query(search_query, top_k=target_top_k)
+        retrieval_time = time.time() - retrieval_start
+        logger.info(f"Retrieved {len(results)} chunks in {retrieval_time:.2f}s | session={session_id}")
+
         context = self.build_context(results)
+
+        llm_start = time.time()
         prompt = self.build_prompt(query, context, history)
-        
         answer = self.llmservice.generate_response(system_prompt, prompt)
+        llm_time = time.time() - llm_start
+        logger.info(f"LLM response generated in {llm_time:.2f}s | session={session_id}")
+
         sources = [ 
             {
                 'source': result['source'],
@@ -90,49 +85,18 @@ Answer:
             }
             for result in results 
         ]
+
+        self.memory.add_message(session_id, query, answer)
+
+        total_time = time.time() - start_time
+        logger.info(
+            f"Total pipeline: {total_time:.2f}s "
+            f"(resolver={resolution_time:.2f}s, retrieval={retrieval_time:.2f}s, llm={llm_time:.2f}s) "
+            f"| session={session_id}"
+        )
+
         return {
             "question": query,
             "answer": answer,
             "sources": sources
-        }
-  
-    def get_answer(self, query, session_id = "session_id", top_k: int = 5, similarity_threshold: float = 0.65):
-
-        # get history for the db
-        history = self.memory.get_history(session_id)
-        
-
-        questions = self.query_decomposer.decompose(query)
-
-        results = []
-        for question in questions:
-            result = self.get_single_answer(question, history= history, top_k=top_k, similarity_threshold=similarity_threshold)
-            results.append(result)
-
-        if len(results) == 1:
-            self.memory.add_message(session_id, query, results[0]['answer'])
-            return results[0]
-
-        else:
-            combined_answer = "\n\n".join(
-                f"{i+1}th Answer. {result['answer']}\n"
-                for i,result in enumerate(results)
-            )
-            seen = set()
-            unique_sources = []
-            for result in results:
-                for source in result['sources']:
-                    key = (source['source'], source['page_no'])
-                    if key not in seen:
-                        seen.add(key)
-                        unique_sources.append(source)
-                
-
-            
-
-        self.memory.add_message(session_id, query, combined_answer)
-        return {
-            "question": query,
-            "answer": combined_answer,
-            "sources": unique_sources
         }
