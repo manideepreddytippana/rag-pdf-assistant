@@ -1,68 +1,102 @@
-import json
+import re
 import logging
 
 logger = logging.getLogger("rag_pipeline")
 
-class QueryResolver:
+_FOLLOW_UP_PRONOUNS = re.compile(
+    r'\b(it|its|they|them|their|theirs|this|that|these|those'
+    r'|he|she|him|her|his|hers)\b',
+    re.IGNORECASE
+)
 
-    def __init__(self, llm_service):
+_FOLLOW_UP_PHRASES = re.compile(
+    r'\b(explain more|tell me more|elaborate|go on|continue'
+    r'|expand on that|what about|how about|why is that'
+    r'|and also|more details|can you clarify|what else'
+    r'|anything else|in more detail|give me more'
+    r'|compared to|versus|same thing|the above'
+    r'|mentioned earlier|you said|you mentioned)\b',
+    re.IGNORECASE
+)
+
+class QueryResolver:
+    """
+    Resolves follow-up queries using local regex-based detection avoiding unnecessary LLM calls.
+    """
+
+    def __init__(self, llm_service=None):
         self.llm_service = llm_service
 
-    def resolve(self, query: str, history: str = "") -> dict:
+    def _extract_last_user_topic(self, history: str) -> str | None:
+        """Extract the last user message from condensed history like user, assistant."""
+        if not history:
+            return None
 
+        lines = history.strip().split("\n")
+        for line in reversed(lines):
+            if line.startswith("User: "):
+                topic = line[6:].strip()
+                return topic if topic else None
+
+        return None
+
+    def _is_follow_up(self, query: str) -> bool:
+        """Detect if the query is a follow-up using regex patterns."""
+        if _FOLLOW_UP_PRONOUNS.search(query):
+            return True
+
+        if _FOLLOW_UP_PHRASES.search(query):
+            return True
+
+        words = query.strip().split()
+        if len(words) <= 3:
+
+            has_named_entity = any(
+                w[0].isupper() and i > 0
+                for i, w in enumerate(words)
+                if len(w) > 1
+            )
+            if not has_named_entity:
+                return True
+
+        return False
+
+    def resolve(self, query: str, history: str = "") -> dict:
+        """
+        Resolve follow-up queries using local regex patterns 
+        and return followup intent and enriched search query.
+        """
         if not history or not history.strip():
             return {
                 "is_follow_up": False,
                 "search_query": query.strip()
             }
 
-        prompt = f"""You are a search query resolver for a document retrieval system.
-Given the conversation history and a user query:
-1. Determine if the user query is a FOLLOW-UP that depends on context or pronouns (e.g., "it", "they", "that", "how many heads does it have?", "explain more about its architecture").
-2. If it is a follow-up, reformulate it into a self-contained, standalone search query by replacing pronouns/references with the explicit subject from history.
-3. If it is a NEW TOPIC or already standalone, do NOT alter the core query.
+        is_follow_up = self._is_follow_up(query)
 
-<conversation_history>
-{history}
-</conversation_history>
-
-<user_query>
-{query}
-</user_query>
-
-Return ONLY valid JSON (no explanation, no markdown ticks):
-{{"is_follow_up": true_or_false, "search_query": "standalone search query string"}}"""
-
-        try:
-            raw_response = self.llm_service.generate_response(
-                system_prompt="You are a query resolution assistant. Output strictly JSON.",
-                user_prompt=prompt
-            ).strip()
-
-            if raw_response.startswith("```json"):
-                raw_response = raw_response[7:]
-            if raw_response.startswith("```"):
-                raw_response = raw_response[3:]
-            if raw_response.endswith("```"):
-                raw_response = raw_response[:-3]
-            raw_response = raw_response.strip()
-
-            data = json.loads(raw_response)
-            is_follow_up = bool(data.get("is_follow_up", False))
-            search_query = str(data.get("search_query", query)).strip()
-
-            if not search_query:
-                search_query = query.strip()
-
-            logger.info(f"Query resolved | is_follow_up={is_follow_up} | search_query='{search_query}'")
-            return {
-                "is_follow_up": is_follow_up,
-                "search_query": search_query
-            }
-
-        except Exception as e:
-            logger.warning(f"Query resolution parsing failed ({e}), falling back to original query")
+        if not is_follow_up:
+            logger.info(
+                f"Query resolved (local) | is_follow_up=False | "
+                f"search_query='{query.strip()[:80]}'"
+            )
             return {
                 "is_follow_up": False,
                 "search_query": query.strip()
             }
+
+        last_topic = self._extract_last_user_topic(history)
+
+        if last_topic:
+
+            search_query = f"{query.strip()} — context: {last_topic}"
+        else:
+            search_query = query.strip()
+
+        logger.info(
+            f"Query resolved (local) | is_follow_up=True | "
+            f"search_query='{search_query[:100]}'"
+        )
+        return {
+            "is_follow_up": True,
+            "search_query": search_query
+        }
