@@ -50,12 +50,14 @@ class Memory:
 
             return "\n".join(history_parts)
 
-    def get_condensed_history(self, session_id: str) -> str:
-        
-        history_xml = self.get_history(session_id)
+    @staticmethod
+    def condense_history_xml(history_xml: str) -> str:
+        """Convert pre-fetched XML history to a condensed plain-text format 
+        which avoids duplicate db queries.
+        """
         if not history_xml:
             return ""
-        
+
         lines = []
         for line in history_xml.split("\n"):
             if line.startswith("<user>") and line.endswith("</user>"):
@@ -63,6 +65,11 @@ class Memory:
             elif line.startswith("<assistant_summary>") and line.endswith("</assistant_summary>"):
                 lines.append(f"Assistant: {line[19:-20]}")
         return "\n".join(lines)
+
+    def get_condensed_history(self, session_id: str) -> str:
+        """fetches history from DB and condenses it.
+        """
+        return self.condense_history_xml(self.get_history(session_id))
 
     def add_message(self, session_id: str, user_message: str, assistant_message: str):
 
