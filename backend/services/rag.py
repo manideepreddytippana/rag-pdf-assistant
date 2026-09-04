@@ -57,12 +57,16 @@ Provide a precise answer based solely on the retrieved context above.""".strip()
         logger.info(f"Query received | session={session_id} | query={query[:100]}")
 
         history = self.memory.get_history(session_id)
-        condensed_history = self.memory.get_condensed_history(session_id)
 
-        resolution_start = time.time()
-        resolution = self.query_resolver.resolve(query, condensed_history)
-        search_query = resolution.get("search_query", query)
-        resolution_time = time.time() - resolution_start
+        if history.strip():
+            condensed_history = self.memory.condense_history_xml(history)
+            resolution_start = time.time()
+            resolution = self.query_resolver.resolve(query, condensed_history)
+            search_query = resolution.get("search_query", query)
+            resolution_time = time.time() - resolution_start
+        else:
+            search_query = query
+            resolution_time = 0.0
 
         retrieval_start = time.time()
         results = self.retriever.query(search_query, top_k=target_top_k)
