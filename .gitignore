@@ -3,8 +3,6 @@ venv/
 
 .env 
 
-backend/data/*
-!backend/data/.gitkeep
 __pycache__
 
 chroma_db/*
